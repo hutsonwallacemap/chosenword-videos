@@ -73,9 +73,10 @@ const playable = async (videos) => {
   return videos.filter(v => ok.has(v.id));
 };
 
-// "#hope #faith" in the description -> ['hope', 'faith'] (topic buttons in the app)
+// "#hope #faith" in the description -> ['hope', 'faith'] (topic buttons in the app).
+// \p{M} keeps Hindi vowel signs, so #मंदिर stays whole.
 const hashtags = (text) =>
-  [...new Set((text.match(/#[\p{L}\p{N}_]+/gu) || []).map(t => t.slice(1).toLowerCase()))]
+  [...new Set((text.match(/#[\p{L}\p{M}\p{N}_]+/gu) || []).map(t => t.slice(1).toLowerCase()))]
     .filter(t => t !== 'shorts')
     .slice(0, 6);
 
