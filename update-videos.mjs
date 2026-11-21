@@ -1,7 +1,7 @@
 // Builds videos.json, the list of short videos the Chosen Word app plays.
 //
 // Reads every channel in channels.json with the YouTube Data API and keeps the
-// Shorts that may be embedded in other apps. Run by GitHub Actions every hour
+// Shorts that may be embedded in other apps, most viewed first. Run by GitHub Actions every hour
 // (update-videos.yml); needs the secret YT_API_KEY.
 //
 //   YT_API_KEY=... node update-videos.mjs
@@ -42,7 +42,7 @@ const playlistVideos = async (playlistId) => {
       const s = item.snippet;
       const id = s?.resourceId?.videoId;
       if (id && s.title !== 'Private video' && s.title !== 'Deleted video') {
-        out.push({ id, title: s.title, description: s.description || '', publishedAt: s.publishedAt });
+        out.push({ id, title: s.title, description: s.description || '', publishedAt: s.publishedAt, channel: s.videoOwnerChannelTitle || s.channelTitle || '' });
       }
     }
     pageToken = body.nextPageToken;
@@ -60,17 +60,28 @@ const channelShorts = async (id) => {
   return playlistVideos(`UU${id.slice(2)}`);
 };
 
-// Only public videos that other apps are allowed to play
+// View counts are rounded (2 significant figures: 1234 -> 1200), so the file
+// only changes when a video's views really grow, not on every hourly run
+const roundViews = (n) => {
+  if (!n || n < 100) return n || 0;
+  const step = 10 ** (Math.floor(Math.log10(n)) - 1);
+  return Math.round(n / step) * step;
+};
+
+// Only public videos that other apps are allowed to play, with their view counts
+// (the same request, so no extra API quota)
 const playable = async (videos) => {
-  const ok = new Set();
+  const views = new Map();
   for (let i = 0; i < videos.length; i += 50) {
     const ids = videos.slice(i, i + 50).map(v => v.id).join(',');
-    const body = await get('videos', { part: 'status', id: ids });
+    const body = await get('videos', { part: 'status,statistics', id: ids });
     for (const v of body.items || []) {
-      if (v.status?.embeddable && v.status?.privacyStatus === 'public' && !v.status?.madeForKids) ok.add(v.id);
+      if (v.status?.embeddable && v.status?.privacyStatus === 'public' && !v.status?.madeForKids) {
+        views.set(v.id, roundViews(Number(v.statistics?.viewCount) || 0));
+      }
     }
   }
-  return videos.filter(v => ok.has(v.id));
+  return videos.filter(v => views.has(v.id)).map(v => ({ ...v, views: views.get(v.id) }));
 };
 
 // "#hope #faith" in the description -> ['hope', 'faith'] (topic buttons in the app).
@@ -87,10 +98,11 @@ for (const { lang, channel } of channels) {
   const videos = await playable(await channelShorts(id));
   console.log(`${channel} (${lang}): ${videos.length} videos`);
   for (const v of videos) {
-    all.push({ id: v.id, lang, title: v.title, publishedAt: v.publishedAt, tags: hashtags(`${v.title} ${v.description}`) });
+    all.push({ id: v.id, lang, title: v.title, channel: v.channel, views: v.views, publishedAt: v.publishedAt, tags: hashtags(`${v.title} ${v.description}`) });
   }
 }
-all.sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''));
+// Most viewed first; equal views: newest first
+all.sort((a, b) => (b.views - a.views) || (b.publishedAt || '').localeCompare(a.publishedAt || ''));
 
 const file = new URL('./videos.json', import.meta.url);
 const next = JSON.stringify({ updatedAt: new Date().toISOString(), videos: all }, null, 1);
